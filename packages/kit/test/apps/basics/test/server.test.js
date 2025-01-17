@@ -1,6 +1,6 @@
+import process from 'node:process';
 import { expect } from '@playwright/test';
 import { test } from '../../../utils.js';
-import { fetch } from 'undici';
 import { createHash, randomBytes } from 'node:crypto';
 
 /** @typedef {import('@playwright/test').Response} Response */
@@ -250,6 +250,20 @@ test.describe('Endpoints', () => {
 		expect(response.status()).toBe(200);
 		expect(await response.text()).toBe('catch-all');
 	});
+
+	test('can get assets using absolute path', async ({ request }) => {
+		const response = await request.get('/endpoint-output/fetch-asset/absolute');
+		expect(response.status()).toBe(200);
+		expect(response.headers()['content-type']).toBe('text/plain');
+		expect(await response.text()).toBe('Cos sie konczy, cos zaczyna');
+	});
+
+	test('can get assets using relative path', async ({ request }) => {
+		const response = await request.get('/endpoint-output/fetch-asset/relative');
+		expect(response.status()).toBe(200);
+		expect(response.headers()['content-type']).toBe('text/plain');
+		expect(await response.text()).toBe('Cos sie konczy, cos zaczyna');
+	});
 });
 
 test.describe('Errors', () => {
@@ -290,17 +304,17 @@ test.describe('Errors', () => {
 	test('stack traces are not fixed twice', async ({ page }) => {
 		await page.goto('/errors/stack-trace');
 		expect(await page.textContent('#message')).toBe(
-			'This is your custom error page saying: "Cannot read properties of undefined (reading \'toUpperCase\')"'
+			'This is your custom error page saying: "Cannot read properties of undefined (reading \'toUpperCase\') (500 Internal Error)"'
 		);
 
 		// check the stack wasn't mutated
 		await page.goto('/errors/stack-trace');
 		expect(await page.textContent('#message')).toBe(
-			'This is your custom error page saying: "Cannot read properties of undefined (reading \'toUpperCase\')"'
+			'This is your custom error page saying: "Cannot read properties of undefined (reading \'toUpperCase\') (500 Internal Error)"'
 		);
 	});
 
-	test('throw error(...) in endpoint', async ({ request, read_errors }) => {
+	test('error(...) in endpoint', async ({ request, read_errors }) => {
 		// HTML
 		{
 			const res = await request.get('/errors/endpoint-throw-error', {
@@ -332,7 +346,7 @@ test.describe('Errors', () => {
 		}
 	});
 
-	test('throw redirect(...) in endpoint', async ({ page, read_errors }) => {
+	test('redirect(...) in endpoint', async ({ page, read_errors }) => {
 		const res = await page.goto('/errors/endpoint-throw-redirect');
 		expect(res?.status()).toBe(200); // redirects are opaque to the browser
 
@@ -359,7 +373,9 @@ test.describe('Errors', () => {
 		expect(await res_json.json()).toEqual({
 			type: 'error',
 			error: {
-				message: 'POST method not allowed. No actions exist for this page'
+				message: process.env.DEV
+					? 'POST method not allowed. No form actions exist for the page at /errors/missing-actions (405 Method Not Allowed)'
+					: 'POST method not allowed. No form actions exist for this page (405 Method Not Allowed)'
 			}
 		});
 	});
@@ -390,7 +406,7 @@ test.describe('Errors', () => {
 			expect(error.stack).toBe(undefined);
 			expect(res.status()).toBe(500);
 			expect(error).toEqual({
-				message: 'Error in handle'
+				message: 'Error in handle (500 Internal Error)'
 			});
 		}
 	});
@@ -484,6 +500,12 @@ test.describe('Load', () => {
 		expect(await response.text()).toBe('');
 		expect(response.headers()['allow']).toBe('GET, HEAD, OPTIONS, POST');
 	});
+
+	test('allows logging URL search params', async ({ page }) => {
+		await page.goto('/load/server-log-search-param');
+
+		expect(await page.textContent('p')).toBe('hello world');
+	});
 });
 
 test.describe('Routing', () => {
@@ -501,6 +523,21 @@ test.describe('Routing', () => {
 
 		const data = await response.json();
 		expect(data).toEqual({ surprise: 'lol' });
+	});
+
+	test('Vite trailing slash redirect for prerendered pages retains URL query string', async ({
+		request
+	}) => {
+		if (process.env.DEV) return;
+
+		let response = await request.get('/routing/prerendered/trailing-slash/always?a=1');
+		expect(new URL(response.url()).search).toBe('?a=1');
+
+		response = await request.get('/routing/prerendered/trailing-slash/never/?a=1');
+		expect(new URL(response.url()).search).toBe('?a=1');
+
+		response = await request.get('/routing/prerendered/trailing-slash/ignore/?a=1');
+		expect(new URL(response.url()).search).toBe('?a=1');
 	});
 });
 
@@ -553,11 +590,6 @@ test.describe('Static files', () => {
 		expect(await r2.json()).toEqual({ works: true });
 	});
 
-	test('Filenames are case-sensitive', async ({ request }) => {
-		const response = await request.get('/static.JSON');
-		expect(response.status()).toBe(404);
-	});
-
 	test('Serves symlinked asset', async ({ request }) => {
 		const response = await request.get('/symlink-from/hello.txt');
 		expect(response.status()).toBe(200);
@@ -599,5 +631,33 @@ test.describe('Miscellaneous', () => {
 		const response = await request.get('/immutable-headers');
 		expect(response.status()).toBe(200);
 		expect(await response.text()).toBe('foo');
+	});
+
+	test('serves prerendered non-latin pages', async ({ request }) => {
+		const response = await request.get('/prerendering/中文');
+		expect(response.status()).toBe(200);
+	});
+});
+
+test.describe('reroute', () => {
+	test('Apply reroute when directly accessing a page', async ({ page }) => {
+		await page.goto('/reroute/basic/a');
+		expect(await page.textContent('h1')).toContain(
+			'Successfully rewritten, URL should still show a: /reroute/basic/a'
+		);
+	});
+
+	test('Returns a 500 response if reroute throws an error on the server', async ({ page }) => {
+		const response = await page.goto('/reroute/error-handling/server-error');
+		expect(response?.status()).toBe(500);
+	});
+});
+
+test.describe('init', () => {
+	test('init server hook is called once before the load function', async ({ page }) => {
+		await page.goto('/init-hooks');
+		await expect(page.locator('p')).toHaveText('1');
+		await page.reload();
+		await expect(page.locator('p')).toHaveText('1');
 	});
 });

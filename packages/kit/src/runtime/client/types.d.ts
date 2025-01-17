@@ -1,16 +1,13 @@
-import { applyAction } from '../app/forms';
-import {
-	afterNavigate,
-	beforeNavigate,
-	onNavigate,
-	goto,
-	invalidate,
-	invalidateAll,
-	preloadCode,
-	preloadData
-} from '../app/navigation';
 import { SvelteComponent } from 'svelte';
-import { ClientHooks, CSRPageNode, CSRPageNodeLoader, CSRRoute, TrailingSlash, Uses } from 'types';
+import {
+	ClientHooks,
+	CSRPageNode,
+	CSRPageNodeLoader,
+	CSRRoute,
+	ServerDataNode,
+	TrailingSlash,
+	Uses
+} from 'types';
 import { Page, ParamMatcher } from '@sveltejs/kit';
 
 export interface SvelteKitApp {
@@ -37,33 +34,16 @@ export interface SvelteKitApp {
 
 	hooks: ClientHooks;
 
+	decode: (type: string, value: any) => any;
+
+	decoders: Record<string, (data: any) => any>;
+
+	/**
+	 * Whether or not we're using hash-based routing
+	 */
+	hash: boolean;
+
 	root: typeof SvelteComponent;
-}
-
-export interface Client {
-	// public API, exposed via $app/navigation
-	after_navigate: typeof afterNavigate;
-	before_navigate: typeof beforeNavigate;
-	on_navigate: typeof onNavigate;
-	disable_scroll_handling(): void;
-	goto: typeof goto;
-	invalidate: typeof invalidate;
-	invalidate_all: typeof invalidateAll;
-	preload_code: typeof preloadCode;
-	preload_data: typeof preloadData;
-	apply_action: typeof applyAction;
-
-	// private API
-	_hydrate(opts: {
-		status: number;
-		error: App.Error | null;
-		node_ids: number[];
-		params: Record<string, string>;
-		route: { id: string | null };
-		data: Array<import('types').ServerDataNode | null>;
-		form: Record<string, any> | null;
-	}): Promise<void>;
-	_start_router(): void;
 }
 
 export type NavigationIntent = {
@@ -90,8 +70,9 @@ export type NavigationFinished = {
 	type: 'loaded';
 	state: NavigationState;
 	props: {
-		components: Array<typeof SvelteComponent>;
-		page?: Page;
+		constructors: Array<typeof SvelteComponent>;
+		components?: SvelteComponent[];
+		page: Page;
 		form?: Record<string, any> | null;
 		[key: `data_${number}`]: Record<string, any>;
 	};
@@ -119,4 +100,14 @@ export interface NavigationState {
 	params: Record<string, string>;
 	route: CSRRoute | null;
 	url: URL;
+}
+
+export interface HydrateOptions {
+	status: number;
+	error: App.Error | null;
+	node_ids: number[];
+	params: Record<string, string>;
+	route: { id: string | null };
+	data: Array<ServerDataNode | null>;
+	form: Record<string, any> | null;
 }

@@ -1,18 +1,18 @@
-import fs from 'node:fs';
+import { error, isHttpError, redirect } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
-import { HttpError } from '../../../../src/runtime/control';
-import { error, redirect } from '@sveltejs/kit';
+import fs from 'node:fs';
 import { COOKIE_NAME } from './routes/cookies/shared';
+import { _set_from_init } from './routes/init-hooks/+page.server';
 
 /**
  * Transform an error into a POJO, by copying its `name`, `message`
  * and (in dev) `stack`, plus any custom properties, plus recursively
  * serialized `cause` properties.
  *
- * @param {HttpError | Error } error
+ * @param {Error} error
  */
 export function error_to_pojo(error) {
-	if (error instanceof HttpError) {
+	if (isHttpError(error)) {
 		return {
 			status: error.status,
 			...error.body
@@ -24,7 +24,7 @@ export function error_to_pojo(error) {
 }
 
 /** @type {import('@sveltejs/kit').HandleServerError} */
-export const handleError = ({ event, error: e }) => {
+export const handleError = ({ event, error: e, status, message }) => {
 	const error = /** @type {Error} */ (e);
 	// TODO we do this because there's no other way (that i'm aware of)
 	// to communicate errors back to the test suite. even if we could
@@ -35,7 +35,10 @@ export const handleError = ({ event, error: e }) => {
 		: {};
 	errors[event.url.pathname] = error_to_pojo(error);
 	fs.writeFileSync('test/errors.json', JSON.stringify(errors));
-	return event.url.pathname.endsWith('404-fallback') ? undefined : { message: error.message };
+
+	return event.url.pathname.endsWith('404-fallback')
+		? undefined
+		: { message: `${error.message} (${status} ${message})` };
 };
 
 export const handle = sequence(
@@ -74,9 +77,12 @@ export const handle = sequence(
 	},
 	async ({ event, resolve }) => {
 		if (event.url.pathname === '/cookies/serialize') {
-			event.cookies.set('before', 'before');
+			event.cookies.set('before', 'before', { path: '' });
 			const response = await resolve(event);
-			response.headers.append('set-cookie', event.cookies.serialize('after', 'after'));
+			response.headers.append(
+				'set-cookie',
+				event.cookies.serialize('after', 'after', { path: '' })
+			);
 			return response;
 		}
 		return resolve(event);
@@ -85,7 +91,7 @@ export const handle = sequence(
 		if (event.url.pathname === '/errors/error-in-handle') {
 			throw new Error('Error in handle');
 		} else if (event.url.pathname === '/errors/expected-error-in-handle') {
-			throw error(500, 'Expected error in handle');
+			error(500, 'Expected error in handle');
 		}
 
 		const response = await resolve(event, {
@@ -105,10 +111,10 @@ export const handle = sequence(
 	async ({ event, resolve }) => {
 		if (event.url.pathname.includes('/redirect/in-handle')) {
 			if (event.url.search === '?throw') {
-				throw redirect(307, event.url.origin + '/redirect/c');
+				redirect(307, event.url.origin + '/redirect/c');
 			} else if (event.url.search.includes('cookies')) {
 				event.cookies.delete(COOKIE_NAME, { path: '/cookies' });
-				throw redirect(307, event.url.origin + '/cookies');
+				redirect(307, event.url.origin + '/cookies');
 			} else {
 				return new Response(undefined, { status: 307, headers: { location: '/redirect/c' } });
 			}
@@ -125,7 +131,7 @@ export const handle = sequence(
 	},
 	async ({ event, resolve }) => {
 		if (event.url.pathname === '/actions/redirect-in-handle' && event.request.method === 'POST') {
-			throw redirect(303, '/actions/enhance');
+			redirect(303, '/actions/enhance');
 		}
 
 		return resolve(event);
@@ -148,4 +154,8 @@ export async function handleFetch({ request, fetch }) {
 	}
 
 	return fetch(request);
+}
+
+export function init() {
+	_set_from_init();
 }
